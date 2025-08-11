@@ -1,11 +1,9 @@
 def find_matching_ids_with_num_char_and_sentence(sentences_with_num_and_char, word_to_ids, id_to_list):
-    """
-    sentences_with_num_and_char: [(str, int, any)] - list of tuples (sentence, number, char)
-    word_to_ids: dict[str, set[int]] - dictionary mapping word to a set of row IDs
-    id_to_list: dict[int, list] - dictionary mapping row ID to a list where the first element is a sentence
-
-    Returns: set[(int, int, any, str)] - set of tuples (row ID, number, char, sentence)
-    """
+    def contains_sublist(lst, sublst):
+        for i in range(len(lst) - len(sublst) + 1):
+            if lst[i:i+len(sublst)] == sublst:
+                return True
+        return False
 
     matching = set()
 
@@ -22,17 +20,48 @@ def find_matching_ids_with_num_char_and_sentence(sentences_with_num_and_char, wo
                 reference_sentence = id_to_list[row_id][0]
                 reference_words = reference_sentence.split()
 
-                pos = 0
-                found_all = True
-                for w in words:
-                    try:
-                        pos = reference_words.index(w, pos) + 1
-                    except ValueError:
-                        found_all = False
-                        break
-                if found_all:
+                if contains_sublist(reference_words, words):
                     matching.add((row_id, number, char, sentence))
 
     return matching
 
+
+# ====== בדיקת הכל כלול ======
+
+# ====== טסט נוסף - בדיקת רצף מדויק וחוסר רצף ======
+
+sentences_with_num_and_char = [
+    ("quick brown fox", 10, 'X'),   # רצף מדויק
+    ("brown quick fox", 11, 'Y'),   # אותן מילים, סדר שונה - לא מתאים
+    ("quick fox", 12, 'Z'),         # תת-רצף, לא רצף מלא של המילים
+]
+
+word_to_ids = {
+    "quick": {100, 101},
+    "brown": {100, 101},
+    "fox": {100, 101},
+}
+
+id_to_list = {
+    100: ["the quick hhh brown fox jumps"],
+    101: ["the brown quick fox jumps"],
+}
+
+results = find_matching_ids_with_num_char_and_sentence(
+    sentences_with_num_and_char,
+    word_to_ids,
+    id_to_list
+)
+
+
+# הרצה
+results = find_matching_ids_with_num_char_and_sentence(
+    sentences_with_num_and_char,
+    word_to_ids,
+    id_to_list
+)
+
+
+for r in sorted(results):
+    print(r)
 
