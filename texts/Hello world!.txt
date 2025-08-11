@@ -1,0 +1,3 @@
+Hello world!
+This is a short text file.
+It contains only a few lines for testing.

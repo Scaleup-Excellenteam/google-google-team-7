@@ -1,71 +1,90 @@
 # main.py
 from __future__ import annotations
-from typing import Tuple, Dict, List
-from scoring import top5_for_query
-import pickle
 from pathlib import Path
+from indexing import (
+    build_id_and_word_index, save_index_pickle, load_index_pickle,
+    CACHE_FILE, normalize_line
+)
+# אם הפונקציות באמת ב-scoring, השאירי כך; אחרת ייבאי מהמקום הנכון
+from scoring import (
+    all_one_edits_sentence_tuples, all_one_edits_tuples,
+    find_matching_ids_with_num_char_and_sentence,
+    score_matches, insert_list_to_heap
+)
 
-CACHE_FILE = "index_cache.pkl"
+def prompt_for_path() -> str:
+    raw_path = input("Paste path to file or folder for indexing: ").strip()
+    return raw_path.strip('"').strip("'")
 
-def load_cache() -> Tuple[Dict[int, list], Dict[str, set], dict]:
-    p = Path(CACHE_FILE)
+def compute(user_input: str) -> None:
+    # 1) בניית אינדקס ושמירה
+    path = prompt_for_path()
+    if not path:
+        print("No path entered. Exit.")
+        return
+
+    p = Path(path)
     if not p.exists():
-        raise FileNotFoundError(
-            f"{CACHE_FILE} לא נמצא. יש להריץ קודם indexing.py כדי לבנות ולשמור את האינדקס."
-        )
-    with open(CACHE_FILE, "rb") as f:
-        id_map, word_index, meta = pickle.load(f)
-    return id_map, word_index, meta
+        print(f"Error: Path does not exist: {p}")
+        return
 
-def main() -> None:
-    # 1) טען את האינדקס מהמטמון
-    id_map, word_index, meta = load_cache()
-    print("[cache] loaded:", meta)
+    skip_empty = True
+    max_bytes = 50_000_000  # 50MB
 
-    # 2) לולאה אינטראקטיבית של שרשור קלט
-    cumulative: str = ""
-    print("\n=== Interactive scoring search ===")
-    print("הקלד טקסט חיפוש. הקלד '#' ליציאה.\n")
+    print(f"\n[build] starting index of: {p.resolve()}")
+    id_map, word_index = build_id_and_word_index(str(p), skip_empty=skip_empty, max_bytes=max_bytes)
+    print(f"[build] Completed. Indexed rows: {len(id_map)} | Unique words: {len(word_index)}")
 
-    while True:
-        prompt = "קלט: " if not cumulative else f"קלט נוכחי: [{cumulative}] | הוסף: "
-        try:
-            user = input(prompt).strip()
-        except (EOFError, KeyboardInterrupt):
-            print("\nיציאה.")
-            break
+    save_index_pickle(id_map, word_index, root_path=str(p.resolve()), cache_file=CACHE_FILE)
+    print("[done] The index has been saved. You can continue with the scoring stages.")
 
-        if user == "#":
-            print("ביי 👋")
-            break
+    # 2) טען מהמטמון (או השתמש ישירות ב-id_map/word_index שיצרת)
+    id_map, word_index, meta = load_index_pickle(CACHE_FILE)
+    if id_map is None or word_index is None:
+        print("Cache loading failed.")
+        return
 
-        if user:
-            cumulative = (cumulative + " " + user).strip() if cumulative else user
-        else:
-            if not cumulative:
-                print("לא הוזן קלט.\n")
-                continue
+    # 3) נרמול קלט
+    normalized = normalize_line(user_input)
 
-        # 3) הפעל ניקוד והחזר Top-5
-        top5 = top5_for_query(cumulative, id_map, word_index, k=5)
+    # 4) יצירת וריאציות והמרה לפורמט שה-matcher צריך: (sentence, number, char)
+    if " " in normalized:
+        # all_one_edits_sentence_tuples -> (new_sentence, word_idx, index)
+        raw = all_one_edits_sentence_tuples(normalized)
+        sentences_with_num_and_char = [(s, idx, 'r') for (s, _wi, idx) in raw]
+    else:
+        # all_one_edits_tuples -> (new_word, index)
+        raw = all_one_edits_tuples(normalized)
+        sentences_with_num_and_char = [(w, idx, 'r') for (w, idx) in raw]
 
-        if not top5:
-            print("\n(אין תוצאות מתאימות לשאילתה הנוכחית)\n")
-            continue
+    # 5) מציאת התאמות (שימי לב לסדר הפרמטרים!)
+    # word_to_ids = word_index, id_to_list = id_map
+    matches = find_matching_ids_with_num_char_and_sentence(
+        sentences_with_num_and_char,
+        word_index,  # נכון: word_to_ids
+        id_map       # נכון: id_to_list
+    )
 
-        # 4) הדפסה
-        print("\n== Top 5 ==")
-        for rank, (score, rid, corpus_sentence, meta) in enumerate(top5, start=1):
-            kind = {"o":"original","r":"replace","a":"add","d":"delete"}.get(meta["kind"], meta["kind"])
-            wi = meta["word_idx"]
-            idx = meta["index_in_word"]
-            info = id_map[rid]  # [text, file_name, line_no, file_path]
-            file_name, line_no, file_path = info[1], info[2], info[3]
-            print(f"{rank}. score={score} | rid={rid} | kind={kind} | word_idx={wi} | index_in_word={idx}")
-            print(f"   {corpus_sentence}")
-            print(f"   [{file_name}:{line_no}] {file_path}\n")
+    if not matches:
+        print("No matches found.")
+        return
 
-        # הלולאה ממשיכה; המשתמש מוסיף קלט נוסף או '#'
+    # 6) ניקוד
+    scored_matches = score_matches(matches)  # [(score, row_id), ...]
+    if not scored_matches:
+        print("There's nothing to point out.")
+        return
+
+    # 7) Top-5
+    pq = insert_list_to_heap(scored_matches)  # ← להעביר את הנתונים, לא את הפונקציה
+    top5 = sorted(pq.get_items(), reverse=True)  # גבוה -> נמוך
+
+    print("\n== Top 5 ==")
+    for rank, (score, rid) in enumerate(top5, start=1):
+        text, file_name, line_no, file_path = id_map[rid]
+        print(f"{rank}. score={score} | rid={rid}")
+        print(f"   {text}")
+        print(f"   [{file_name}:{line_no}] {file_path}\n")
 
 if __name__ == "__main__":
-    main()
+    compute('be a')

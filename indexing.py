@@ -115,17 +115,3 @@ def load_index_pickle(cache_file: str = CACHE_FILE):
         print(f"[cache] Failed to load cache ({e}).")
         return None, None, None
 
-def load_index_pickle(cache_file: str = CACHE_FILE):
-    p = Path(cache_file)
-    if not p.exists():
-        return None, None, None
-    try:
-        with open(cache_file, "rb") as f:
-            id_map, word_index, meta = pickle.load(f)  # ← זה tuple, לא dict
-        print(f"[cache] Loaded index from {cache_file}")
-        if meta:
-            print(f"[cache] meta: {meta}")
-        return id_map, word_index, meta
-    except Exception as e:
-        print(f"[cache] Failed to load cache ({e}).")
-        return None, None, None
